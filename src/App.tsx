@@ -8,8 +8,7 @@ import {
   Download,
   Users,
   CalendarClock,
-  Phone,
-  ShieldCheck,
+  Phone,  ShieldCheck,
   Cloud,
   Wifi,
   WifiOff,
@@ -152,12 +151,25 @@ function normalizeCustomer(raw: Partial<CustomerProfile>): CustomerProfile {
 }
 
 function getSavedSupabaseSettings(): SupabaseSettings {
+  const envUrl = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_SUPABASE_URL || "";
+  const envAnonKey = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_SUPABASE_ANON_KEY || "";
+  const envStaffPasscode = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_STAFF_PASSCODE || "";
+
   try {
     const raw = localStorage.getItem(SUPABASE_SETTINGS_KEY);
-    if (!raw) return { url: "", anonKey: "", staffPasscode: "" };
-    return { url: "", anonKey: "", staffPasscode: "", ...JSON.parse(raw) };
+    const localSettings = raw ? (JSON.parse(raw) as Partial<SupabaseSettings>) : {};
+
+    return {
+      url: envUrl || localSettings.url || "",
+      anonKey: envAnonKey || localSettings.anonKey || "",
+      staffPasscode: envStaffPasscode || localSettings.staffPasscode || "",
+    };
   } catch {
-    return { url: "", anonKey: "", staffPasscode: "" };
+    return {
+      url: envUrl,
+      anonKey: envAnonKey,
+      staffPasscode: envStaffPasscode,
+    };
   }
 }
 
@@ -591,13 +603,17 @@ export default function CourtesyCarDatabaseApp() {
 
   async function saveSetup() {
     localStorage.setItem(SUPABASE_SETTINGS_KEY, JSON.stringify(setupForm));
-    setSettings(setupForm);
+    setSettings(getSavedSupabaseSettings());
     setShowSetup(false);
-    await connectCloud(setupForm);
+    await connectCloud({
+      url: setupForm.url,
+      anonKey: setupForm.anonKey,
+      staffPasscode: setupForm.staffPasscode,
+    });
   }
 
   function signInStaff() {
-    const expectedPasscode = settings.staffPasscode.trim();
+    const expectedPasscode = getSavedSupabaseSettings().staffPasscode.trim();
     if (expectedPasscode && staffSignIn.passcode !== expectedPasscode) {
       alert("Incorrect staff passcode.");
       return;
@@ -749,6 +765,17 @@ export default function CourtesyCarDatabaseApp() {
               </button>
             </div>
 
+            <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
+              <div className="font-semibold mb-1">Recommended permanent setup</div>
+              <p>
+                Put your Supabase URL, anon key, and staff passcode into Vercel environment variables named
+                <code className="mx-1">VITE_SUPABASE_URL</code>,
+                <code className="mx-1">VITE_SUPABASE_ANON_KEY</code>, and
+                <code className="mx-1">VITE_STAFF_PASSCODE</code>.
+                When those are present, this app will use them automatically on every device.
+              </p>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Field label="Supabase URL">
                 <input
@@ -810,7 +837,7 @@ create table if not exists courtesy_car_customers (
   updatedAt text
 );`}</pre>
               <p className="mt-3 text-slate-600">
-                After that, save the URL and anon key here. This app will then use the shared cloud database instead of browser-only storage.
+                After that, save the URL and anon key here. For a permanent multi-device setup, add the same values to Vercel environment variables and redeploy.
               </p>
             </div>
           </div>
@@ -1177,3 +1204,4 @@ console.assert(VEHICLE_OPTIONS.length === 3, "Vehicle dropdown should contain 3 
 console.assert(emptyForm().vehicle === "Tahoe 1", "Default vehicle should be Tahoe 1");
 console.assert(sanitizeInitials("e.h.") === "EH", "Initials should sanitize correctly");
 console.assert(buildCustomerProfiles([]).length === 0, "No records should produce no customer profiles");
+console.assert(typeof getSavedSupabaseSettings().url === "string", "Supabase settings should always return strings");
