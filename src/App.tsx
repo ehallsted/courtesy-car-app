@@ -9,7 +9,6 @@ import {
   Users,
   CalendarClock,
   Phone,
-  FileText,
   ShieldCheck,
   Cloud,
   Wifi,
