@@ -589,6 +589,10 @@ export default function CourtesyCarDatabaseApp() {
   }
 
   function exportData() {
+    if (!session) {
+      alert("Please sign in as a staff member first.");
+      return;
+    }
     const blob = new Blob(
       [JSON.stringify({ exportedAt: new Date().toISOString(), records, customers }, null, 2)],
       { type: "application/json" }
@@ -649,6 +653,8 @@ export default function CourtesyCarDatabaseApp() {
 
   const StatusIcon =
     cloudState === "connected" ? Wifi : cloudState === "connecting" ? RefreshCw : cloudState === "error" ? AlertCircle : WifiOff;
+
+  const isSignedIn = !!session;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 p-4 md:p-8">
@@ -726,26 +732,41 @@ export default function CourtesyCarDatabaseApp() {
               )}
 
               <button
-                onClick={() => setShowSetup((prev) => !prev)}
-                className="inline-flex items-center gap-2 px-4 py-3 rounded-2xl bg-white border border-slate-300 hover:bg-slate-50"
+                onClick={() => {
+                  if (!isSignedIn) return;
+                  setShowSetup((prev) => !prev);
+                }}
+                disabled={!isSignedIn}
+                className={`inline-flex items-center gap-2 px-4 py-3 rounded-2xl border ${
+                  isSignedIn ? "bg-white border-slate-300 hover:bg-slate-50" : "bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed"
+                }`}
               >
                 <Cloud className="w-4 h-4" /> Cloud Setup
               </button>
               <button
                 onClick={refreshCloud}
-                className="inline-flex items-center gap-2 px-4 py-3 rounded-2xl bg-white border border-slate-300 hover:bg-slate-50"
+                disabled={!isSignedIn}
+                className={`inline-flex items-center gap-2 px-4 py-3 rounded-2xl border ${
+                  isSignedIn ? "bg-white border-slate-300 hover:bg-slate-50" : "bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed"
+                }`}
               >
                 <RefreshCw className={`w-4 h-4 ${isBusy ? "animate-spin" : ""}`} /> Refresh
               </button>
               <button
                 onClick={exportData}
-                className="inline-flex items-center gap-2 px-4 py-3 rounded-2xl bg-white border border-slate-300 hover:bg-slate-50"
+                disabled={!isSignedIn}
+                className={`inline-flex items-center gap-2 px-4 py-3 rounded-2xl border ${
+                  isSignedIn ? "bg-white border-slate-300 hover:bg-slate-50" : "bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed"
+                }`}
               >
                 <Download className="w-4 h-4" /> Export Data
               </button>
               <button
                 onClick={openNewForm}
-                className="inline-flex items-center gap-2 px-4 py-3 rounded-2xl bg-slate-900 text-white hover:opacity-90"
+                disabled={!isSignedIn}
+                className={`inline-flex items-center gap-2 px-4 py-3 rounded-2xl ${
+                  isSignedIn ? "bg-slate-900 text-white hover:opacity-90" : "bg-slate-300 text-slate-500 cursor-not-allowed"
+                }`}
               >
                 <Plus className="w-4 h-4" /> New Checkout
               </button>
@@ -753,7 +774,7 @@ export default function CourtesyCarDatabaseApp() {
           </div>
         </div>
 
-        {showSetup && (
+        {isSignedIn && showSetup && (
           <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 space-y-4">
             <div className="flex items-center justify-between gap-4">
               <div>
@@ -1107,6 +1128,8 @@ create table if not exists courtesy_car_customers (
         </div>
       </div>
 
+        
+
       <style>{`
         .input {
           width: 100%;
@@ -1205,3 +1228,4 @@ console.assert(emptyForm().vehicle === "Tahoe 1", "Default vehicle should be Tah
 console.assert(sanitizeInitials("e.h.") === "EH", "Initials should sanitize correctly");
 console.assert(buildCustomerProfiles([]).length === 0, "No records should produce no customer profiles");
 console.assert(typeof getSavedSupabaseSettings().url === "string", "Supabase settings should always return strings");
+console.assert(sanitizeInitials("abc12") === "ABC", "Initial sanitizing should remove non-letters");
