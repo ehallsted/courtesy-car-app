@@ -1,21 +1,22 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Car,
-  Search,
-  Plus,
-  Trash2,
-  Upload,
-  Download,
-  Users,
+  AlertCircle,
   CalendarClock,
-  Phone,  ShieldCheck,
+  Car,
   Cloud,
-  Wifi,
-  WifiOff,
+  Download,
   KeyRound,
   LogOut,
+  Phone,
+  Plus,
   RefreshCw,
-  AlertCircle,
+  Search,
+  ShieldCheck,
+  Trash2,
+  Upload,
+  Users,
+  Wifi,
+  WifiOff,
 } from "lucide-react";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
@@ -151,14 +152,14 @@ function normalizeCustomer(raw: Partial<CustomerProfile>): CustomerProfile {
 }
 
 function getSavedSupabaseSettings(): SupabaseSettings {
-  const envUrl = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_SUPABASE_URL || "";
-  const envAnonKey = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_SUPABASE_ANON_KEY || "";
-  const envStaffPasscode = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_STAFF_PASSCODE || "";
+  const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env || {};
+  const envUrl = env.VITE_SUPABASE_URL || "";
+  const envAnonKey = env.VITE_SUPABASE_ANON_KEY || "";
+  const envStaffPasscode = env.VITE_STAFF_PASSCODE || "";
 
   try {
     const raw = localStorage.getItem(SUPABASE_SETTINGS_KEY);
     const localSettings = raw ? (JSON.parse(raw) as Partial<SupabaseSettings>) : {};
-
     return {
       url: envUrl || localSettings.url || "",
       anonKey: envAnonKey || localSettings.anonKey || "",
@@ -294,7 +295,6 @@ export default function CourtesyCarDatabaseApp() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<CheckoutRecord>(emptyForm());
-  const [settings, setSettings] = useState<SupabaseSettings>(getSavedSupabaseSettings());
   const [session, setSession] = useState<StaffSession | null>(getSavedSession());
   const [cloudState, setCloudState] = useState<CloudState>("local");
   const [cloudMessage, setCloudMessage] = useState("Using local demo mode.");
@@ -319,18 +319,20 @@ export default function CourtesyCarDatabaseApp() {
   useEffect(() => {
     if (session) {
       localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-      setForm((prev) => ({
-        ...prev,
-        checkoutInitials: prev.checkoutInitials || session.initials,
-      }));
+      setForm((prev) => ({ ...prev, checkoutInitials: prev.checkoutInitials || session.initials }));
     } else {
       localStorage.removeItem(SESSION_KEY);
+      setShowForm(false);
+      setShowSetup(false);
     }
   }, [session]);
 
   useEffect(() => {
     void connectCloud();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const isSignedIn = !!session;
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -366,7 +368,7 @@ export default function CourtesyCarDatabaseApp() {
   );
 
   async function connectCloud(customSettings?: SupabaseSettings) {
-    const effective = customSettings || settings;
+    const effective = customSettings || getSavedSupabaseSettings();
     const client = createSupabase(effective);
 
     if (!client) {
@@ -384,9 +386,7 @@ export default function CourtesyCarDatabaseApp() {
       if (!schemaStatus.ok) {
         supabaseRef.current = client;
         setCloudState("error");
-        setCloudMessage(
-          "Connected to Supabase, but the required tables are missing. Open setup instructions below."
-        );
+        setCloudMessage("Connected to Supabase, but the required tables are missing. Open setup instructions below.");
         return;
       }
 
@@ -404,6 +404,7 @@ export default function CourtesyCarDatabaseApp() {
   }
 
   async function refreshCloud() {
+    if (!session) return;
     if (!supabaseRef.current) {
       await connectCloud();
       return;
@@ -429,7 +430,8 @@ export default function CourtesyCarDatabaseApp() {
   }
 
   function openNewForm() {
-    setForm(emptyForm(session?.initials || ""));
+    if (!session) return;
+    setForm(emptyForm(session.initials || ""));
     setEditingId(null);
     setShowForm(true);
   }
@@ -449,6 +451,7 @@ export default function CourtesyCarDatabaseApp() {
   }
 
   function openEditForm(record: CheckoutRecord) {
+    if (!session) return;
     setForm(record);
     setEditingId(record.id);
     setShowForm(true);
@@ -457,13 +460,9 @@ export default function CourtesyCarDatabaseApp() {
   async function persistCloudRecords(nextRecords: CheckoutRecord[], nextCustomers: CustomerProfile[]) {
     if (!supabaseRef.current) return;
 
-    const client = supabaseRef.current;
-    const recordsPayload = nextRecords.map((record) => ({ ...record }));
-    const customersPayload = nextCustomers.map((customer) => ({ ...customer }));
-
     const [recordsWrite, customersWrite] = await Promise.all([
-      client.from("courtesy_car_records").upsert(recordsPayload, { onConflict: "id" }),
-      client.from("courtesy_car_customers").upsert(customersPayload, { onConflict: "id" }),
+      supabaseRef.current.from("courtesy_car_records").upsert(nextRecords, { onConflict: "id" }),
+      supabaseRef.current.from("courtesy_car_customers").upsert(nextCustomers, { onConflict: "id" }),
     ]);
 
     if (recordsWrite.error) throw new Error(recordsWrite.error.message);
@@ -531,6 +530,7 @@ export default function CourtesyCarDatabaseApp() {
   }
 
   async function deleteRecord(id: string) {
+    if (!session) return;
     const ok = window.confirm("Delete this checkout record?");
     if (!ok) return;
 
@@ -593,10 +593,9 @@ export default function CourtesyCarDatabaseApp() {
       alert("Please sign in as a staff member first.");
       return;
     }
-    const blob = new Blob(
-      [JSON.stringify({ exportedAt: new Date().toISOString(), records, customers }, null, 2)],
-      { type: "application/json" }
-    );
+    const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), records, customers }, null, 2)], {
+      type: "application/json",
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -605,16 +604,12 @@ export default function CourtesyCarDatabaseApp() {
     URL.revokeObjectURL(url);
   }
 
-  async function saveSetup() {
-    localStorage.setItem(SUPABASE_SETTINGS_KEY, JSON.stringify(setupForm));
-    setSettings(getSavedSupabaseSettings());
-    setShowSetup(false);
-    await connectCloud({
-      url: setupForm.url,
-      anonKey: setupForm.anonKey,
-      staffPasscode: setupForm.staffPasscode,
-    });
-  }
+async function saveSetup() {
+  localStorage.setItem(SUPABASE_SETTINGS_KEY, JSON.stringify(setupForm));
+  const merged = getSavedSupabaseSettings();
+  setShowSetup(false);
+  await connectCloud(merged);
+}
 
   function signInStaff() {
     const expectedPasscode = getSavedSupabaseSettings().staffPasscode.trim();
@@ -654,8 +649,6 @@ export default function CourtesyCarDatabaseApp() {
   const StatusIcon =
     cloudState === "connected" ? Wifi : cloudState === "connecting" ? RefreshCw : cloudState === "error" ? AlertCircle : WifiOff;
 
-  const isSignedIn = !!session;
-
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 p-4 md:p-8">
       <div className="max-w-7xl mx-auto space-y-6">
@@ -671,39 +664,73 @@ export default function CourtesyCarDatabaseApp() {
                   <p className="text-slate-600 mt-1">Shared checkout tracking for front desk staff.</p>
                 </div>
               </div>
-              <div className="flex flex-wrap gap-2 mt-4">
-                <span className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm ${statusPill}`}>
-                  <StatusIcon className={`w-4 h-4 ${cloudState === "connecting" ? "animate-spin" : ""}`} />
-                  {cloudState === "connected"
-                    ? "Shared cloud mode"
-                    : cloudState === "connecting"
-                      ? "Connecting"
-                      : cloudState === "error"
-                        ? "Setup needed"
-                        : "Local demo mode"}
-                </span>
-                <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm bg-slate-100 text-slate-700">
-                  <Cloud className="w-4 h-4" /> {cloudMessage}
-                </span>
-              </div>
+              {isSignedIn && (
+                <div className="flex flex-wrap gap-2 mt-4">
+                  <span className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm ${statusPill}`}>
+                    <StatusIcon className={`w-4 h-4 ${cloudState === "connecting" ? "animate-spin" : ""}`} />
+                    {cloudState === "connected"
+                      ? "Shared cloud mode"
+                      : cloudState === "connecting"
+                        ? "Connecting"
+                        : cloudState === "error"
+                          ? "Setup needed"
+                          : "Local demo mode"}
+                  </span>
+                  <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm bg-slate-100 text-slate-700">
+                    <Cloud className="w-4 h-4" /> {cloudMessage}
+                  </span>
+                </div>
+              )}
             </div>
 
             <div className="flex flex-wrap gap-3 items-start xl:justify-end">
-              {session ? (
-                <div className="rounded-2xl border border-slate-200 p-3 bg-slate-50 min-w-[220px]">
-                  <div className="text-sm text-slate-500">Signed in staff</div>
-                  <div className="font-semibold">{session.name}</div>
-                  <div className="text-sm text-slate-600">Initials: {session.initials}</div>
+              {isSignedIn ? (
+                <>
+                  <div className="rounded-2xl border border-slate-200 p-3 bg-slate-50 min-w-[220px]">
+                    <div className="text-sm text-slate-500">Signed in staff</div>
+                    <div className="font-semibold">{session?.name}</div>
+                    <div className="text-sm text-slate-600">Initials: {session?.initials}</div>
+                    <button
+                      onClick={signOutStaff}
+                      className="mt-3 inline-flex items-center gap-2 px-3 py-2 rounded-2xl border border-slate-300 hover:bg-white"
+                    >
+                      <LogOut className="w-4 h-4" /> Sign Out
+                    </button>
+                  </div>
+
                   <button
-                    onClick={signOutStaff}
-                    className="mt-3 inline-flex items-center gap-2 px-3 py-2 rounded-2xl border border-slate-300 hover:bg-white"
+                    onClick={() => setShowSetup((prev) => !prev)}
+                    className="inline-flex items-center gap-2 px-4 py-3 rounded-2xl border bg-white border-slate-300 hover:bg-slate-50"
                   >
-                    <LogOut className="w-4 h-4" /> Sign Out
+                    <Cloud className="w-4 h-4" /> Cloud Setup
                   </button>
-                </div>
+                  <button
+                    onClick={refreshCloud}
+                    className="inline-flex items-center gap-2 px-4 py-3 rounded-2xl border bg-white border-slate-300 hover:bg-slate-50"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isBusy ? "animate-spin" : ""}`} /> Refresh
+                  </button>
+                  <button
+                    onClick={exportData}
+                    className="inline-flex items-center gap-2 px-4 py-3 rounded-2xl border bg-white border-slate-300 hover:bg-slate-50"
+                  >
+                    <Download className="w-4 h-4" /> Export Data
+                  </button>
+                  <button
+                    onClick={openNewForm}
+                    className="inline-flex items-center gap-2 px-4 py-3 rounded-2xl bg-slate-900 text-white hover:opacity-90"
+                  >
+                    <Plus className="w-4 h-4" /> New Checkout
+                  </button>
+                </>
               ) : (
-                <div className="rounded-2xl border border-slate-200 p-3 bg-slate-50 min-w-[280px] space-y-2">
-                  <div className="text-sm font-medium flex items-center gap-2"><KeyRound className="w-4 h-4" /> Staff Sign In</div>
+                <div className="rounded-2xl border border-slate-200 p-4 bg-slate-50 min-w-[320px] max-w-[380px] space-y-3 mx-auto xl:mx-0">
+                  <div className="text-lg font-semibold flex items-center gap-2 justify-center xl:justify-start">
+                    <KeyRound className="w-5 h-5" /> Staff Sign In
+                  </div>
+                  <p className="text-sm text-slate-600 text-center xl:text-left">
+                    Sign in to access the courtesy car system.
+                  </p>
                   <input
                     className="input"
                     placeholder="Staff name"
@@ -725,51 +752,11 @@ export default function CourtesyCarDatabaseApp() {
                       onChange={(e) => setStaffSignIn((prev) => ({ ...prev, passcode: e.target.value }))}
                     />
                   </div>
-                  <button onClick={signInStaff} className="px-4 py-2 rounded-2xl bg-slate-900 text-white hover:opacity-90">
+                  <button onClick={signInStaff} className="w-full px-4 py-3 rounded-2xl bg-slate-900 text-white hover:opacity-90">
                     Sign In
                   </button>
                 </div>
               )}
-
-              <button
-                onClick={() => {
-                  if (!isSignedIn) return;
-                  setShowSetup((prev) => !prev);
-                }}
-                disabled={!isSignedIn}
-                className={`inline-flex items-center gap-2 px-4 py-3 rounded-2xl border ${
-                  isSignedIn ? "bg-white border-slate-300 hover:bg-slate-50" : "bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed"
-                }`}
-              >
-                <Cloud className="w-4 h-4" /> Cloud Setup
-              </button>
-              <button
-                onClick={refreshCloud}
-                disabled={!isSignedIn}
-                className={`inline-flex items-center gap-2 px-4 py-3 rounded-2xl border ${
-                  isSignedIn ? "bg-white border-slate-300 hover:bg-slate-50" : "bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed"
-                }`}
-              >
-                <RefreshCw className={`w-4 h-4 ${isBusy ? "animate-spin" : ""}`} /> Refresh
-              </button>
-              <button
-                onClick={exportData}
-                disabled={!isSignedIn}
-                className={`inline-flex items-center gap-2 px-4 py-3 rounded-2xl border ${
-                  isSignedIn ? "bg-white border-slate-300 hover:bg-slate-50" : "bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed"
-                }`}
-              >
-                <Download className="w-4 h-4" /> Export Data
-              </button>
-              <button
-                onClick={openNewForm}
-                disabled={!isSignedIn}
-                className={`inline-flex items-center gap-2 px-4 py-3 rounded-2xl ${
-                  isSignedIn ? "bg-slate-900 text-white hover:opacity-90" : "bg-slate-300 text-slate-500 cursor-not-allowed"
-                }`}
-              >
-                <Plus className="w-4 h-4" /> New Checkout
-              </button>
             </div>
           </div>
         </div>
@@ -864,271 +851,271 @@ create table if not exists courtesy_car_customers (
           </div>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <StatCard icon={<Users className="w-5 h-5" />} label="Active Checkouts" value={String(activeCount)} />
-          <StatCard icon={<ShieldCheck className="w-5 h-5" />} label="Returned" value={String(returnedCount)} />
-          <StatCard icon={<CalendarClock className="w-5 h-5" />} label="Retention" value="1 year" />
-          <StatCard icon={<Cloud className="w-5 h-5" />} label="Saved Customers" value={String(customers.length)} />
-        </div>
+        {isSignedIn && (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <StatCard icon={<Users className="w-5 h-5" />} label="Active Checkouts" value={String(activeCount)} />
+              <StatCard icon={<ShieldCheck className="w-5 h-5" />} label="Returned" value={String(returnedCount)} />
+              <StatCard icon={<CalendarClock className="w-5 h-5" />} label="Retention" value="1 year" />
+              <StatCard icon={<Cloud className="w-5 h-5" />} label="Saved Customers" value={String(customers.length)} />
+            </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {vehicleStatus.map((item) => (
-            <div key={item.vehicle} className="bg-white rounded-3xl shadow-sm border border-slate-200 p-5">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <div className="text-sm text-slate-500">Vehicle</div>
-                  <div className="text-xl font-semibold">{item.vehicle}</div>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              {vehicleStatus.map((item) => (
+                <div key={item.vehicle} className="bg-white rounded-3xl shadow-sm border border-slate-200 p-5">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <div className="text-sm text-slate-500">Vehicle</div>
+                      <div className="text-xl font-semibold">{item.vehicle}</div>
+                    </div>
+                    <span
+                      className={`inline-flex px-3 py-1 rounded-full text-sm ${
+                        item.activeRecord ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"
+                      }`}
+                    >
+                      {item.activeRecord ? "Out" : "Available"}
+                    </span>
+                  </div>
+                  {item.activeRecord ? (
+                    <div className="mt-3 text-sm text-slate-600">
+                      {item.activeRecord.customerName} • due {formatDateTime(item.activeRecord.expectedReturnAt)}
+                    </div>
+                  ) : (
+                    <div className="mt-3 text-sm text-slate-600">Ready for checkout.</div>
+                  )}
                 </div>
-                <span
-                  className={`inline-flex px-3 py-1 rounded-full text-sm ${
-                    item.activeRecord ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"
-                  }`}
-                >
-                  {item.activeRecord ? "Out" : "Available"}
-                </span>
+              ))}
+            </div>
+
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-4 md:p-5">
+              <div className="flex items-center gap-3 border border-slate-200 rounded-2xl px-4 py-3">
+                <Search className="w-5 h-5 text-slate-500" />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search by customer, phone, vehicle, initials, destination, notes, or staff..."
+                  className="w-full outline-none bg-transparent"
+                />
               </div>
-              {item.activeRecord ? (
-                <div className="mt-3 text-sm text-slate-600">
-                  {item.activeRecord.customerName} • due {formatDateTime(item.activeRecord.expectedReturnAt)}
+            </div>
+
+            {showForm && (
+              <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 space-y-5">
+                <div className="flex items-center justify-between gap-4">
+                  <h2 className="text-2xl font-semibold">{editingId ? "Edit Checkout" : "New Checkout"}</h2>
+                  <button onClick={resetForm} className="px-4 py-2 rounded-2xl border border-slate-300 hover:bg-slate-50">
+                    Cancel
+                  </button>
                 </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  <Field label="Reuse Existing Customer">
+                    <select
+                      className="input"
+                      value=""
+                      onChange={(e) => {
+                        if (e.target.value) applySavedCustomer(e.target.value);
+                      }}
+                    >
+                      <option value="">Select saved customer...</option>
+                      {customers.map((customer) => (
+                        <option key={customer.id} value={customer.id}>
+                          {customer.customerName} {customer.contactPhone ? `- ${customer.contactPhone}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="Customer Name">
+                    <input className="input" value={form.customerName} onChange={(e) => setForm({ ...form, customerName: e.target.value })} />
+                  </Field>
+                  <Field label="Contact Phone">
+                    <input className="input" value={form.contactPhone} onChange={(e) => setForm({ ...form, contactPhone: e.target.value })} />
+                  </Field>
+                  <Field label="Email">
+                    <input className="input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+                  </Field>
+                  <Field label="Vehicle">
+                    <select className="input" value={form.vehicle} onChange={(e) => setForm({ ...form, vehicle: e.target.value })}>
+                      {VEHICLE_OPTIONS.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="Aircraft N Number">
+                    <input
+                      className="input"
+                      value={form.aircraftNNumber}
+                      onChange={(e) => setForm({ ...form, aircraftNNumber: e.target.value.toUpperCase() })}
+                    />
+                  </Field>
+                  <Field label="Destination">
+                    <input className="input" value={form.destination} onChange={(e) => setForm({ ...form, destination: e.target.value })} />
+                  </Field>
+                  <Field label="Employee Initials (Checkout)">
+                    <input
+                      className="input"
+                      value={form.checkoutInitials}
+                      onChange={(e) => setForm({ ...form, checkoutInitials: sanitizeInitials(e.target.value) })}
+                    />
+                  </Field>
+                  <Field label="Checkout Date & Time">
+                    <input
+                      type="datetime-local"
+                      className="input"
+                      value={form.checkoutAt}
+                      onChange={(e) => setForm({ ...form, checkoutAt: e.target.value })}
+                    />
+                  </Field>
+                  <Field label="Expected Return Date & Time">
+                    <input
+                      type="datetime-local"
+                      className="input"
+                      value={form.expectedReturnAt}
+                      onChange={(e) => setForm({ ...form, expectedReturnAt: e.target.value })}
+                    />
+                  </Field>
+                  <Field label="Actual Return Date & Time">
+                    <input
+                      type="datetime-local"
+                      className="input"
+                      value={form.actualReturnAt}
+                      onChange={(e) => setForm({ ...form, actualReturnAt: e.target.value })}
+                    />
+                  </Field>
+                </div>
+
+                <Field label="Notes">
+                  <textarea className="input min-h-[110px]" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+                </Field>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <UploadCard
+                    title="Driver License Copy"
+                    buttonLabel="Upload File"
+                    attachmentName={form.driverLicenseCopy?.name || "No file attached"}
+                    onClick={() => licenseInputRef.current?.click()}
+                  >
+                    <input
+                      ref={licenseInputRef}
+                      type="file"
+                      className="hidden"
+                      accept="image/*,.pdf"
+                      onChange={(e) => void handleAttachmentChange("driverLicenseCopy", e.target.files)}
+                    />
+                  </UploadCard>
+                  <UploadCard
+                    title="Use Agreement"
+                    buttonLabel="Upload File"
+                    attachmentName={form.useAgreement?.name || "No file attached"}
+                    onClick={() => agreementInputRef.current?.click()}
+                  >
+                    <input
+                      ref={agreementInputRef}
+                      type="file"
+                      className="hidden"
+                      accept="image/*,.pdf"
+                      onChange={(e) => void handleAttachmentChange("useAgreement", e.target.files)}
+                    />
+                  </UploadCard>
+                </div>
+
+                <div className="flex justify-end">
+                  <button onClick={() => void saveRecord()} className="px-5 py-3 rounded-2xl bg-slate-900 text-white hover:opacity-90">
+                    {editingId ? "Save Changes" : "Save Checkout"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 gap-4">
+              {filtered.length === 0 ? (
+                <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-10 text-center text-slate-500">No records found.</div>
               ) : (
-                <div className="mt-3 text-sm text-slate-600">Ready for checkout.</div>
+                filtered.map((record) => {
+                  const overdue = !record.actualReturnAt && record.expectedReturnAt && new Date(record.expectedReturnAt).getTime() < Date.now();
+                  return (
+                    <div
+                      key={record.id}
+                      className={`bg-white rounded-3xl shadow-sm border p-5 md:p-6 ${overdue ? "border-rose-300 bg-rose-50/40" : "border-slate-200"}`}
+                    >
+                      <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
+                        <div className="space-y-3 flex-1">
+                          <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-4">
+                            <h3 className="text-2xl font-semibold">{record.customerName}</h3>
+                            <span
+                              className={`inline-flex w-fit px-3 py-1 rounded-full text-sm ${
+                                record.actualReturnAt
+                                  ? "bg-emerald-100 text-emerald-700"
+                                  : overdue
+                                    ? "bg-rose-100 text-rose-700"
+                                    : "bg-amber-100 text-amber-700"
+                              }`}
+                            >
+                              {record.actualReturnAt ? "Returned" : overdue ? "Overdue" : "Checked Out"}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 text-sm text-slate-700">
+                            <Info icon={<Phone className="w-4 h-4" />} label="Phone" value={record.contactPhone || "—"} />
+                            <Info icon={<Car className="w-4 h-4" />} label="Vehicle" value={record.vehicle || "—"} />
+                            <Info icon={<CalendarClock className="w-4 h-4" />} label="Checkout" value={formatDateTime(record.checkoutAt)} />
+                            <Info label="Out By" value={record.checkoutInitials || "—"} />
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 text-sm text-slate-700">
+                            <Info icon={<CalendarClock className="w-4 h-4" />} label="Expected Return" value={formatDateTime(record.expectedReturnAt)} />
+                            <Info label="Actual Return" value={formatDateTime(record.actualReturnAt)} />
+                            <Info label="In By" value={record.checkinInitials || "—"} />
+                            <Info label="Email" value={record.email || "—"} />
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 text-sm text-slate-700">
+                            <Info label="Aircraft N Number" value={record.aircraftNNumber || "—"} />
+                            <Info label="Destination" value={record.destination || "—"} />
+                            <Info label="Last Updated" value={formatDateTime(record.updatedAt)} />
+                            <Info label="Edited By" value={record.lastEditedBy || "—"} />
+                          </div>
+
+                          {record.notes ? (
+                            <div>
+                              <div className="text-sm font-medium text-slate-500 mb-1">Notes</div>
+                              <p className="text-slate-700 whitespace-pre-wrap">{record.notes}</p>
+                            </div>
+                          ) : null}
+
+                          <div className="flex flex-wrap gap-3 text-sm">
+                            <AttachmentBadge attachment={record.driverLicenseCopy} label="Driver License" />
+                            <AttachmentBadge attachment={record.useAgreement} label="Use Agreement" />
+                          </div>
+                        </div>
+
+                        <div className="flex xl:flex-col gap-2">
+                          <button onClick={() => openEditForm(record)} className="px-4 py-2 rounded-2xl border border-slate-300 hover:bg-slate-50">
+                            Edit
+                          </button>
+                          {!record.actualReturnAt && (
+                            <button onClick={() => void markReturned(record.id)} className="px-4 py-2 rounded-2xl bg-slate-900 text-white hover:opacity-90">
+                              Mark Returned
+                            </button>
+                          )}
+                          <button
+                            onClick={() => void deleteRecord(record.id)}
+                            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-2xl border border-rose-200 text-rose-600 hover:bg-rose-50"
+                          >
+                            <Trash2 className="w-4 h-4" /> Delete
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
               )}
             </div>
-          ))}
-        </div>
-
-        <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-4 md:p-5">
-          <div className="flex items-center gap-3 border border-slate-200 rounded-2xl px-4 py-3">
-            <Search className="w-5 h-5 text-slate-500" />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by customer, phone, vehicle, initials, destination, notes, or staff..."
-              className="w-full outline-none bg-transparent"
-            />
-          </div>
-        </div>
-
-        {showForm && (
-          <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 space-y-5">
-            <div className="flex items-center justify-between gap-4">
-              <h2 className="text-2xl font-semibold">{editingId ? "Edit Checkout" : "New Checkout"}</h2>
-              <button onClick={resetForm} className="px-4 py-2 rounded-2xl border border-slate-300 hover:bg-slate-50">
-                Cancel
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-              <Field label="Reuse Existing Customer">
-                <select
-                  className="input"
-                  value=""
-                  onChange={(e) => {
-                    if (e.target.value) applySavedCustomer(e.target.value);
-                  }}
-                >
-                  <option value="">Select saved customer...</option>
-                  {customers.map((customer) => (
-                    <option key={customer.id} value={customer.id}>
-                      {customer.customerName} {customer.contactPhone ? `- ${customer.contactPhone}` : ""}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Customer Name">
-                <input className="input" value={form.customerName} onChange={(e) => setForm({ ...form, customerName: e.target.value })} />
-              </Field>
-              <Field label="Contact Phone">
-                <input className="input" value={form.contactPhone} onChange={(e) => setForm({ ...form, contactPhone: e.target.value })} />
-              </Field>
-              <Field label="Email">
-                <input className="input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-              </Field>
-              <Field label="Vehicle">
-                <select className="input" value={form.vehicle} onChange={(e) => setForm({ ...form, vehicle: e.target.value })}>
-                  {VEHICLE_OPTIONS.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Aircraft N Number">
-                <input
-                  className="input"
-                  value={form.aircraftNNumber}
-                  onChange={(e) => setForm({ ...form, aircraftNNumber: e.target.value.toUpperCase() })}
-                />
-              </Field>
-              <Field label="Destination">
-                <input className="input" value={form.destination} onChange={(e) => setForm({ ...form, destination: e.target.value })} />
-              </Field>
-              <Field label="Employee Initials (Checkout)">
-                <input
-                  className="input"
-                  value={form.checkoutInitials}
-                  onChange={(e) => setForm({ ...form, checkoutInitials: sanitizeInitials(e.target.value) })}
-                />
-              </Field>
-              <Field label="Checkout Date & Time">
-                <input
-                  type="datetime-local"
-                  className="input"
-                  value={form.checkoutAt}
-                  onChange={(e) => setForm({ ...form, checkoutAt: e.target.value })}
-                />
-              </Field>
-              <Field label="Expected Return Date & Time">
-                <input
-                  type="datetime-local"
-                  className="input"
-                  value={form.expectedReturnAt}
-                  onChange={(e) => setForm({ ...form, expectedReturnAt: e.target.value })}
-                />
-              </Field>
-              <Field label="Actual Return Date & Time">
-                <input
-                  type="datetime-local"
-                  className="input"
-                  value={form.actualReturnAt}
-                  onChange={(e) => setForm({ ...form, actualReturnAt: e.target.value })}
-                />
-              </Field>
-            </div>
-
-            <Field label="Notes">
-              <textarea className="input min-h-[110px]" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
-            </Field>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <UploadCard
-                title="Driver License Copy"
-                buttonLabel="Upload File"
-                attachmentName={form.driverLicenseCopy?.name || "No file attached"}
-                onClick={() => licenseInputRef.current?.click()}
-              >
-                <input
-                  ref={licenseInputRef}
-                  type="file"
-                  className="hidden"
-                  accept="image/*,.pdf"
-                  onChange={(e) => void handleAttachmentChange("driverLicenseCopy", e.target.files)}
-                />
-              </UploadCard>
-              <UploadCard
-                title="Use Agreement"
-                buttonLabel="Upload File"
-                attachmentName={form.useAgreement?.name || "No file attached"}
-                onClick={() => agreementInputRef.current?.click()}
-              >
-                <input
-                  ref={agreementInputRef}
-                  type="file"
-                  className="hidden"
-                  accept="image/*,.pdf"
-                  onChange={(e) => void handleAttachmentChange("useAgreement", e.target.files)}
-                />
-              </UploadCard>
-            </div>
-
-            <div className="flex justify-end">
-              <button onClick={() => void saveRecord()} className="px-5 py-3 rounded-2xl bg-slate-900 text-white hover:opacity-90">
-                {editingId ? "Save Changes" : "Save Checkout"}
-              </button>
-            </div>
-          </div>
+          </>
         )}
-
-        <div className="grid grid-cols-1 gap-4">
-          {filtered.length === 0 ? (
-            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-10 text-center text-slate-500">No records found.</div>
-          ) : (
-            filtered.map((record) => {
-              const overdue = !record.actualReturnAt && record.expectedReturnAt && new Date(record.expectedReturnAt).getTime() < Date.now();
-              return (
-                <div
-                  key={record.id}
-                  className={`bg-white rounded-3xl shadow-sm border p-5 md:p-6 ${
-                    overdue ? "border-rose-300 bg-rose-50/40" : "border-slate-200"
-                  }`}
-                >
-                  <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
-                    <div className="space-y-3 flex-1">
-                      <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-4">
-                        <h3 className="text-2xl font-semibold">{record.customerName}</h3>
-                        <span
-                          className={`inline-flex w-fit px-3 py-1 rounded-full text-sm ${
-                            record.actualReturnAt
-                              ? "bg-emerald-100 text-emerald-700"
-                              : overdue
-                                ? "bg-rose-100 text-rose-700"
-                                : "bg-amber-100 text-amber-700"
-                          }`}
-                        >
-                          {record.actualReturnAt ? "Returned" : overdue ? "Overdue" : "Checked Out"}
-                        </span>
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 text-sm text-slate-700">
-                        <Info icon={<Phone className="w-4 h-4" />} label="Phone" value={record.contactPhone || "—"} />
-                        <Info icon={<Car className="w-4 h-4" />} label="Vehicle" value={record.vehicle || "—"} />
-                        <Info icon={<CalendarClock className="w-4 h-4" />} label="Checkout" value={formatDateTime(record.checkoutAt)} />
-                        <Info label="Out By" value={record.checkoutInitials || "—"} />
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 text-sm text-slate-700">
-                        <Info icon={<CalendarClock className="w-4 h-4" />} label="Expected Return" value={formatDateTime(record.expectedReturnAt)} />
-                        <Info label="Actual Return" value={formatDateTime(record.actualReturnAt)} />
-                        <Info label="In By" value={record.checkinInitials || "—"} />
-                        <Info label="Email" value={record.email || "—"} />
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 text-sm text-slate-700">
-                        <Info label="Aircraft N Number" value={record.aircraftNNumber || "—"} />
-                        <Info label="Destination" value={record.destination || "—"} />
-                        <Info label="Last Updated" value={formatDateTime(record.updatedAt)} />
-                        <Info label="Edited By" value={record.lastEditedBy || "—"} />
-                      </div>
-
-                      {record.notes ? (
-                        <div>
-                          <div className="text-sm font-medium text-slate-500 mb-1">Notes</div>
-                          <p className="text-slate-700 whitespace-pre-wrap">{record.notes}</p>
-                        </div>
-                      ) : null}
-
-                      <div className="flex flex-wrap gap-3 text-sm">
-                        <AttachmentBadge attachment={record.driverLicenseCopy} label="Driver License" />
-                        <AttachmentBadge attachment={record.useAgreement} label="Use Agreement" />
-                      </div>
-                    </div>
-
-                    <div className="flex xl:flex-col gap-2">
-                      <button onClick={() => openEditForm(record)} className="px-4 py-2 rounded-2xl border border-slate-300 hover:bg-slate-50">
-                        Edit
-                      </button>
-                      {!record.actualReturnAt && (
-                        <button onClick={() => void markReturned(record.id)} className="px-4 py-2 rounded-2xl bg-slate-900 text-white hover:opacity-90">
-                          Mark Returned
-                        </button>
-                      )}
-                      <button
-                        onClick={() => void deleteRecord(record.id)}
-                        className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-2xl border border-rose-200 text-rose-600 hover:bg-rose-50"
-                      >
-                        <Trash2 className="w-4 h-4" /> Delete
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
       </div>
-
-        
 
       <style>{`
         .input {
@@ -1213,11 +1200,7 @@ function AttachmentBadge({ attachment, label }: { attachment: Attachment | null;
   }
 
   return (
-    <a
-      href={attachment.dataUrl}
-      download={attachment.name}
-      className="px-3 py-2 rounded-2xl bg-slate-900 text-white hover:opacity-90"
-    >
+    <a href={attachment.dataUrl} download={attachment.name} className="px-3 py-2 rounded-2xl bg-slate-900 text-white hover:opacity-90">
       {label}: {attachment.name}
     </a>
   );
